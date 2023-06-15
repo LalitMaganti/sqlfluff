@@ -202,6 +202,12 @@ ansi_dialect.set_lexer_matchers(
             ComparisonOperatorSegment,
             segment_kwargs={"type": "like_operator"},
         ),
+        RegexLexer(
+            "glob_operator",
+            r"!?~~?\*?",
+            ComparisonOperatorSegment,
+            segment_kwargs={"type": "glob_operator"},
+        ),
         RegexLexer("newline", r"\r\n|\n", NewlineSegment),
         StringLexer("casting_operator", "::", CodeSegment),
         StringLexer("equals", "=", CodeSegment),
@@ -320,6 +326,7 @@ ansi_dialect.add(
     PipeSegment=StringParser("|", SymbolSegment, type="pipe"),
     BitwiseXorSegment=StringParser("^", SymbolSegment, type="binary_operator"),
     LikeOperatorSegment=TypedParser("like_operator", ComparisonOperatorSegment),
+    GlobOperatorSegment=TypedParser("glob_operator", ComparisonOperatorSegment),
     RawNotSegment=StringParser("!", SymbolSegment, type="raw_comparison_operator"),
     RawEqualsSegment=StringParser("=", SymbolSegment, type="raw_comparison_operator"),
     RawGreaterThanSegment=StringParser(
@@ -429,6 +436,7 @@ ansi_dialect.add(
         Ref("LessThanOrEqualToSegment"),
         Ref("NotEqualToSegment"),
         Ref("LikeOperatorSegment"),
+        Ref("GlobOperatorSegment"),
         Sequence("IS", "DISTINCT", "FROM"),
         Sequence("IS", "NOT", "DISTINCT", "FROM"),
     ),
@@ -509,6 +517,7 @@ ansi_dialect.add(
     IsNullGrammar=Nothing(),
     NotNullGrammar=Nothing(),
     CollateGrammar=Nothing(),
+    GlobGrammar=Nothing(),
     FromClauseTerminatorGrammar=OneOf(
         "WHERE",
         "LIMIT",
@@ -1807,6 +1816,10 @@ ansi_dialect.add(
                         Sequence(
                             Ref.keyword("NOT", optional=True),
                             Ref("LikeGrammar"),
+                        ),
+                        Sequence(
+                            Ref.keyword("NOT", optional=True),
+                            Ref("GlobGrammar"),
                         ),
                         Sequence(
                             Ref("BinaryOperatorGrammar"),

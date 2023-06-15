@@ -3,15 +3,26 @@
 https://www.sqlite.org/
 """
 
+from typing import Optional
+
 from sqlfluff.core.dialects import load_raw_dialect
 from sqlfluff.core.parser import (
+    AnyNumberOf,
     BaseSegment,
     Bracketed,
+    Delimited,
+    Indent,
+    GreedyUntil,
+    StartsWith,
+    Nothing,
     Matchable,
     OneOf,
     OptionallyBracketed,
     Ref,
+    Dedent,
+    RegexLexer,
     Sequence,
+    TypedParser,
 )
 from sqlfluff.dialects import dialect_ansi as ansi
 
@@ -19,18 +30,26 @@ ansi_dialect = load_raw_dialect("ansi")
 
 sqlite_dialect = ansi_dialect.copy_as("sqlite")
 
-sqlite_dialect.sets("reserved_keywords").update(["AUTOINCREMENT"])
-sqlite_dialect.sets("unreserved_keywords").update(["FAIL"])
+sqlite_dialect.sets("reserved_keywords").update(["AUTOINCREMENT", "GLOB", "VIRTUAL", "MATERIALIZED"])
+sqlite_dialect.sets("reserved_keywords").difference_update(["INTERVAL"])
+sqlite_dialect.sets("unreserved_keywords").update(["FAIL", "INTERVAL"])
 
 sqlite_dialect.replace(
     BooleanBinaryOperatorGrammar=OneOf(
-        Ref("AndOperatorGrammar"), Ref("OrOperatorGrammar"), "REGEXP"
+        Ref("AndOperatorGrammar"), Ref("OrOperatorGrammar"), "REGEXP", "GLOB"
     ),
     PrimaryKeyGrammar=Sequence(
         "PRIMARY", "KEY", Sequence("AUTOINCREMENT", optional=True)
     ),
+    GlobGrammar=OneOf("GLOB"),
 )
 
+sqlite_dialect.add(
+    NamedWindowSegmentGrammar=OneOf(
+        Sequence("ORDER", "BY"),
+        "LIMIT",
+    ),
+)
 
 class TableEndClauseSegment(BaseSegment):
     """Support WITHOUT ROWID at end of tables.
@@ -96,6 +115,24 @@ class InsertStatementSegment(BaseSegment):
     )
 
 
+class CTEDefinitionSegment(ansi.CTEDefinitionSegment):
+    """A CTE Definition from a WITH statement.
+    `tab (col1,col2) AS (SELECT a,b FROM x)`
+    """
+
+    type = "common_table_expression"
+    match_grammar: Matchable = Sequence(
+        Ref("SingleIdentifierGrammar"),
+        Ref("CTEColumnList", optional=True),
+        "AS",
+        Ref.keyword("MATERIALIZED", optional=True),
+        Bracketed(
+            # Ephemeral here to subdivide the query.
+            Ref("SelectableGrammar", ephemeral_name="SelectableGrammar")
+        ),
+    )
+
+
 class ColumnConstraintSegment(ansi.ColumnConstraintSegment):
     """Overriding ColumnConstraintSegment to allow for additional segment parsing."""
 
@@ -148,4 +185,117 @@ class TableConstraintSegment(ansi.TableConstraintSegment):
             Sequence("INITIALLY", "IMMEDIATE"),
             optional=True,
         ),
+    )
+
+
+class VirtualTableModuleArgument(BaseSegment):
+    """Foo"""
+
+    type = "virtual_table_module_argument"
+    match_grammar: Matchable = AnyNumberOf(
+        OneOf(
+            Ref("QuotedLiteralSegment"),
+            Ref("NakedIdentifierSegment"),
+            Ref("NumericLiteralSegment"),
+        )
+    )
+
+
+class CreateVirtualTableSegment(BaseSegment):
+    """A `CREATE VIRTUAL TABLE` statement.
+
+    https://www.sqlite.org/lang_insert.html
+    """
+
+    type = "create_virtual_table_statement"
+    match_grammar: Matchable = Sequence(
+        "CREATE",
+        "VIRTUAL",
+        "TABLE",
+        Ref("IfNotExistsGrammar", optional=True),
+        Ref("TableReferenceSegment"),
+        "USING",
+        Ref("NakedIdentifierSegment"),
+        Bracketed(
+            Delimited(VirtualTableModuleArgument),
+            optional=True,
+        ),
+    )
+
+
+class StatementSegment(ansi.StatementSegment):
+  """A generic segment, to any of its child subsegments."""
+  type = "statement"
+  match_grammar: Matchable = GreedyUntil(Ref("DelimiterGrammar"))
+
+  parse_grammar: Matchable = OneOf(
+        Ref("SelectableGrammar"),
+        Ref("MergeStatementSegment"),
+        Ref("InsertStatementSegment"),
+        Ref("TransactionStatementSegment"),
+        Ref("DropTableStatementSegment"),
+        Ref("DropViewStatementSegment"),
+        Ref("CreateUserStatementSegment"),
+        Ref("DropUserStatementSegment"),
+        Ref("TruncateStatementSegment"),
+        Ref("AccessStatementSegment"),
+        Ref("CreateTableStatementSegment"),
+        Ref("CreateRoleStatementSegment"),
+        Ref("DropRoleStatementSegment"),
+        Ref("AlterTableStatementSegment"),
+        Ref("CreateSchemaStatementSegment"),
+        Ref("SetSchemaStatementSegment"),
+        Ref("DropSchemaStatementSegment"),
+        Ref("DropTypeStatementSegment"),
+        Ref("CreateDatabaseStatementSegment"),
+        Ref("DropDatabaseStatementSegment"),
+        Ref("CreateIndexStatementSegment"),
+        Ref("DropIndexStatementSegment"),
+        Ref("CreateViewStatementSegment"),
+        Ref("DeleteStatementSegment"),
+        Ref("UpdateStatementSegment"),
+        Ref("CreateFunctionStatementSegment"),
+        Ref("DropFunctionStatementSegment"),
+        Ref("CreateModelStatementSegment"),
+        Ref("DropModelStatementSegment"),
+        Ref("DescribeStatementSegment"),
+        Ref("UseStatementSegment"),
+        Ref("ExplainStatementSegment"),
+        Ref("CreateSequenceStatementSegment"),
+        Ref("AlterSequenceStatementSegment"),
+        Ref("DropSequenceStatementSegment"),
+        Ref("CreateTriggerStatementSegment"),
+        Ref("DropTriggerStatementSegment"),
+        Ref("CreateVirtualTableSegment"),
+        Bracketed(Ref("StatementSegment")),
+    )
+
+
+class LimitClauseSegment(BaseSegment):
+    """A `LIMIT` clause like in `SELECT`."""
+
+    type = "limit_clause"
+    match_grammar: Matchable = Sequence(
+        "LIMIT",
+        Indent,
+        Ref("BaseExpressionElementGrammar"),
+        Sequence(
+            "OFFSET", Ref("BaseExpressionElementGrammar"),
+            optional=True
+        ),
+        Dedent,
+    )
+
+
+class SelectStatementSegment(ansi.SelectStatementSegment):
+    """A `SELECT` statement."""
+
+    type = "select_statement"
+    match_grammar: Matchable = ansi.SelectStatementSegment.match_grammar.copy()
+    parse_grammar: Matchable = ansi.UnorderedSelectStatementSegment.parse_grammar.copy(
+        insert=[
+            Ref("NamedWindowSegment", optional=True),
+            Ref("OrderByClauseSegment", optional=True),
+            Ref("LimitClauseSegment", optional=True),
+        ]
     )

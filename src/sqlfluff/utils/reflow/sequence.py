@@ -260,7 +260,9 @@ class ReflowSequence:
                     break
             # Capture one more after the whitespace.
             post_idx += 1
-        segments = all_raws[pre_idx:post_idx]
+        segments = all_raws[pre_idx:initial_idx[0]]
+        segments.append(target_segment)
+        segments.extend(all_raws[initial_idx[1]:post_idx])
         reflow_logger.debug(
             "Generating ReflowSequence.from_around_target(). idx: %s. "
             "slice: %s:%s. raw: %r",
